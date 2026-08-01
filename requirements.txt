@@ -1,0 +1,6 @@
+streamlit
+langgraph
+mcp[cli]==1.29.0
+openai
+pdfplumber
+python-docx
