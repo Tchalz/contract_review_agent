@@ -4,6 +4,10 @@ Streamlit front end for the contract review agent.
 On first run, launches the MCP server (mcp_server/app.py) as a background
 subprocess if it isn't already reachable, then drives the LangGraph
 pipeline (pipeline/graph.py) against the uploaded contract.
+
+A jurisdiction selector lets the user ground LLM-backed explanations in
+jurisdiction-specific reference notes (see mcp_server/knowledge_base.py).
+Selecting "None" preserves the original, ungrounded behavior.
 """
 
 import html
@@ -27,6 +31,10 @@ MCP_SERVER_SCRIPT = ROOT / "mcp_server" / "app.py"
 LEVEL_BADGE = {"high": "🔴 High", "medium": "🟡 Medium", "low": "🟢 Low"}
 LEVEL_COLOR = {"high": "#ef4444", "medium": "#f59e0b", "low": "#22c55e"}
 LEVEL_BG = {"high": "rgba(239, 68, 68, 0.28)", "medium": "rgba(245, 158, 11, 0.28)", "low": "rgba(34, 197, 94, 0.28)"}
+
+# Jurisdictions with reference notes in mcp_server/knowledge_base.py.
+# "None" disables jurisdiction grounding entirely (original behavior).
+JURISDICTION_OPTIONS = ["None", "Nigeria", "US", "EU"]
 
 st.set_page_config(page_title="Contract Review Agent", page_icon="📄", layout="wide")
 
@@ -207,6 +215,15 @@ ensure_mcp_server_running()
 
 uploaded = st.file_uploader("Upload a contract", type=["pdf", "docx", "txt"])
 
+jurisdiction = st.selectbox(
+    "Jurisdiction (optional — grounds explanations in local legal context)",
+    options=JURISDICTION_OPTIONS,
+    index=0,
+    help="Grounds LLM explanations and the executive summary in jurisdiction-specific "
+         "reference notes from the knowledge base. Choose 'None' to skip this.",
+)
+jurisdiction_value = "" if jurisdiction == "None" else jurisdiction
+
 if uploaded:
     tmp_path = ROOT / f"_upload{Path(uploaded.name).suffix}"
     tmp_path.write_bytes(uploaded.getvalue())
@@ -216,7 +233,7 @@ if uploaded:
 
     if st.button("Run review", type="primary"):
         with st.spinner("Identifying clauses, flagging risks, generating explanations..."):
-            report = run_review_sync(contract_text)
+            report = run_review_sync(contract_text, jurisdiction_value)
         report["flags"] = annotate_flags_with_pages(report["flags"], contract_text, page_starts)
 
         render_risk_score(report["risk_score"])
@@ -291,7 +308,7 @@ else:
 
 
 st.divider()
-st.subheader("🔍 Compare Two Contract Versions")
+st.subheader("🔁 Compare Two Contract Versions")
 st.caption("See what changed between an older and newer version — added, removed, or reworded clauses, and new or resolved risks.")
 
 comp_col1, comp_col2 = st.columns(2)
