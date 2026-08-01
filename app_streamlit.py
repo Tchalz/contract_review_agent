@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / "pipeline"))
 sys.path.insert(0, str(ROOT / "mcp_server"))
 
 from parsing import extract_text_with_pages, page_number_at  # noqa: E402
-from graph import run_review_sync  # noqa: E402
+from graph import run_review_sync, run_comparison_sync  # noqa: E402
 
 MCP_SERVER_SCRIPT = ROOT / "mcp_server" / "app.py"
 
@@ -113,6 +113,9 @@ def build_text_report(report: dict) -> str:
     lines.append("Not legal advice — a first pass before a qualified reviewer.")
     lines.append("=" * 60)
     lines.append(f"Overall Risk Score: {report['risk_score']}/100 ({risk_band(report['risk_score'])[0]})")
+    lines.append("")
+    lines.append("EXECUTIVE SUMMARY")
+    lines.append(report.get("negotiation_memo", ""))
     lines.append(f"Word count: {summary['word_count']}")
     lines.append(f"Clauses found: {summary['clause_types_found']}/{summary['clause_types_total']}")
     if summary.get("dates_mentioned"):
@@ -218,6 +221,9 @@ if uploaded:
 
         render_risk_score(report["risk_score"])
 
+        st.subheader("Executive Summary")
+        st.info(report["negotiation_memo"])
+
         summary = report["summary"]
         col1, col2, col3 = st.columns(3)
         col1.metric("Word count", summary["word_count"])
@@ -282,3 +288,78 @@ if uploaded:
     tmp_path.unlink(missing_ok=True)
 else:
     st.info("Upload a .pdf, .docx, or .txt contract to begin.")
+
+
+st.divider()
+st.subheader("🔍 Compare Two Contract Versions")
+st.caption("See what changed between an older and newer version — added, removed, or reworded clauses, and new or resolved risks.")
+
+comp_col1, comp_col2 = st.columns(2)
+uploaded_a = comp_col1.file_uploader("Older / baseline version", type=["pdf", "docx", "txt"], key="compare_a")
+uploaded_b = comp_col2.file_uploader("Newer version", type=["pdf", "docx", "txt"], key="compare_b")
+
+if uploaded_a and uploaded_b:
+    if st.button("Compare versions", type="primary"):
+        tmp_a = ROOT / f"_compare_a{Path(uploaded_a.name).suffix}"
+        tmp_b = ROOT / f"_compare_b{Path(uploaded_b.name).suffix}"
+        tmp_a.write_bytes(uploaded_a.getvalue())
+        tmp_b.write_bytes(uploaded_b.getvalue())
+
+        with st.spinner("Extracting text from both versions..."):
+            text_a, _ = extract_text_with_pages(str(tmp_a))
+            text_b, _ = extract_text_with_pages(str(tmp_b))
+
+        with st.spinner("Comparing clauses and risks..."):
+            diff = run_comparison_sync(text_a, text_b)
+
+        tmp_a.unlink(missing_ok=True)
+        tmp_b.unlink(missing_ok=True)
+
+        delta = diff["risk_score_delta"]
+        if delta > 0:
+            st.error(f"Risk score increased by {delta} points ({diff['risk_score_a']} → {diff['risk_score_b']}/100).")
+        elif delta < 0:
+            st.success(f"Risk score decreased by {abs(delta)} points ({diff['risk_score_a']} → {diff['risk_score_b']}/100).")
+        else:
+            st.info(f"Risk score unchanged ({diff['risk_score_b']}/100).")
+
+        d_col1, d_col2, d_col3 = st.columns(3)
+        with d_col1:
+            st.markdown("**➕ Added clauses**")
+            if diff["added_clause_types"]:
+                for c in diff["added_clause_types"]:
+                    st.write(f"- {c.replace('_', ' ').title()}")
+            else:
+                st.write("None")
+        with d_col2:
+            st.markdown("**➖ Removed clauses**")
+            if diff["removed_clause_types"]:
+                for c in diff["removed_clause_types"]:
+                    st.write(f"- {c.replace('_', ' ').title()}")
+            else:
+                st.write("None")
+        with d_col3:
+            st.markdown("**✏️ Reworded clauses**")
+            if diff["changed_clause_types"]:
+                for c in diff["changed_clause_types"]:
+                    st.write(f"- {c.replace('_', ' ').title()}")
+            else:
+                st.write("None")
+
+        r_col1, r_col2 = st.columns(2)
+        with r_col1:
+            st.markdown("**🆕 New risks introduced**")
+            if diff["new_risks"]:
+                for r in diff["new_risks"]:
+                    st.write(f"- {LEVEL_BADGE[r['level']]} {r['clause_type'].replace('_', ' ').title()}")
+            else:
+                st.write("None")
+        with r_col2:
+            st.markdown("**✅ Risks resolved**")
+            if diff["resolved_risks"]:
+                for r in diff["resolved_risks"]:
+                    st.write(f"- {LEVEL_BADGE[r['level']]} {r['clause_type'].replace('_', ' ').title()}")
+            else:
+                st.write("None")
+else:
+    st.caption("Upload both versions above to compare them.")
