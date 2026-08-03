@@ -3,3 +3,11 @@
 __pycache__/
 *.pyc
 _upload*
+
+venv312/
+mcp_server/venv312/
+*.bak
+*_log.txt
+crash_debug.txt
+debug_crash.py
+minimal_interrupt_test.py

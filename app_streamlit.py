@@ -5,6 +5,21 @@ On first run, launches the MCP server (mcp_server/app.py) as a background
 subprocess if it isn't already reachable, then drives the LangGraph
 pipeline (pipeline/graph.py) against the uploaded contract.
 
+Human-in-the-loop review gate
+------------------------------
+Running a review now happens in two steps, matching the graph's real
+pause point:
+
+  1. "Run review" calls start_review_sync(...), which runs the pipeline
+     until it pauses (via LangGraph interrupt()) right after every
+     high/medium flag has an LLM explanation + suggested rewording. The
+     app stores the paused state (thread_id + the flags needing review)
+     in st.session_state and renders an editable form: each flag's
+     rewording is an editable text area with an approve checkbox.
+  2. "Submit review & finalize report" calls resume_review_sync(...) with
+     your edits/approvals, which resumes the *actual paused graph* — not a
+     re-run — straight through to the final report.
+
 A jurisdiction selector lets the user ground LLM-backed explanations in
 jurisdiction-specific reference notes (see mcp_server/knowledge_base.py).
 Selecting "None" preserves the original, ungrounded behavior.
@@ -15,6 +30,7 @@ import json
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import streamlit as st
@@ -24,7 +40,7 @@ sys.path.insert(0, str(ROOT / "pipeline"))
 sys.path.insert(0, str(ROOT / "mcp_server"))
 
 from parsing import extract_text_with_pages, page_number_at  # noqa: E402
-from graph import run_review_sync, run_comparison_sync  # noqa: E402
+from graph import start_review_sync, resume_review_sync, run_comparison_sync  # noqa: E402
 
 MCP_SERVER_SCRIPT = ROOT / "mcp_server" / "app.py"
 
@@ -36,7 +52,65 @@ LEVEL_BG = {"high": "rgba(239, 68, 68, 0.28)", "medium": "rgba(245, 158, 11, 0.2
 # "None" disables jurisdiction grounding entirely (original behavior).
 JURISDICTION_OPTIONS = ["None", "Nigeria", "US", "EU"]
 
-st.set_page_config(page_title="Contract Review Agent", page_icon="📄", layout="wide")
+st.set_page_config(page_title="Clausegraph", page_icon="📄", layout="wide")
+
+st.markdown("""
+<style>
+
+/* ---- Palette: ash / milk, not stark white ---- */
+:root{
+  --cg-page:#f5f4ef;      /* ash */
+  --cg-surface:#fbfaf7;   /* milk */
+  --cg-border:#ddd9cf;
+  --cg-border-strong:#c8c3b6;
+  --cg-text:#1c1b19;
+  --cg-text-muted:#6b675f;
+  --cg-accent:#d85a30;
+  --cg-accent-hover:#bf4b27;
+}
+
+/* Entire app */
+.stApp{background:var(--cg-page) !important;color:var(--cg-text) !important;}
+.main .block-container{background:var(--cg-page) !important;color:var(--cg-text) !important;}
+section[data-testid="stSidebar"]{background:var(--cg-surface) !important;}
+h1,h2,h3,h4,h5,h6{color:var(--cg-text) !important;}
+p,label,.stCaption{color:var(--cg-text) !important;}
+.stMarkdown span:not([style*="color"]){color:var(--cg-text) !important;}
+
+.stButton>button{background:var(--cg-accent) !important;color:#fbfaf7 !important;border:none;border-radius:8px;}
+.stButton>button:hover{background:var(--cg-accent-hover) !important;}
+
+/* File uploader: style only the actual dropzone, single clean dashed edge */
+[data-testid="stFileUploader"]{background:transparent !important;border:none !important;}
+[data-testid="stFileUploaderDropzone"]{
+  background:var(--cg-surface) !important;
+  border:1.5px dashed var(--cg-border-strong) !important;
+  border-radius:12px !important;
+  box-shadow:none !important;
+  box-sizing:border-box;
+}
+[data-testid="stFileUploaderDropzone"]:hover{border-color:var(--cg-accent) !important;}
+[data-testid="stFileUploaderDropzoneInstructions"] span{color:var(--cg-text-muted) !important;}
+
+div[data-baseweb="select"]>div{background:var(--cg-surface) !important;border:1px solid var(--cg-border) !important;border-radius:8px;}
+div[data-baseweb="select"] span{color:var(--cg-text) !important;}
+.stTextInput input,.stTextArea textarea{background:var(--cg-surface) !important;color:var(--cg-text) !important;border:1px solid var(--cg-border) !important;}
+[data-testid="metric-container"]{background:var(--cg-surface);border:1px solid var(--cg-border);border-radius:12px;padding:12px;}
+[data-testid="stVerticalBlockBorderWrapper"]{background:var(--cg-surface) !important;border:1px solid var(--cg-border) !important;}
+
+/* Theme-proof alert banners — fixed colors so they stay legible
+   regardless of the viewer's OS/browser dark-mode setting */
+div[data-testid="stAlertContainer"]{border-radius:10px !important;border:1px solid transparent !important;}
+div[data-testid="stAlertContainer"] p{font-weight:500 !important;}
+div[data-testid="stAlertContainer"][class*="warning"],
+div[data-testid="stAlertContainer"]:has(svg[data-icon="warning"]){
+  background:#fbead2 !important;border-color:#e2b365 !important;
+}
+div[data-testid="stAlertContainer"][class*="warning"] p,
+div[data-testid="stAlertContainer"]:has(svg[data-icon="warning"]) p{color:#6b4a12 !important;}
+</style>
+""", unsafe_allow_html=True)
+
 
 
 @st.cache_resource
@@ -82,7 +156,6 @@ def clause_label(flag: dict) -> str:
     return base
 
 
-
 def risk_band(score: int):
     """Maps a 0-100 risk score to a (label, color) pair for display."""
     if score >= 60:
@@ -99,12 +172,12 @@ def render_risk_score(score: int):
         f"""
         <div style="border:1px solid {color}55; border-radius:10px; padding:16px 20px;
                     background:{color}1a; margin-bottom:8px;">
-            <div style="font-size:0.85rem; opacity:0.8; margin-bottom:4px;">Overall Risk Score</div>
+            <div style="font-size:0.85rem; color:#4a4a48; font-weight:600; margin-bottom:4px;">Overall Risk Score</div>
             <div style="display:flex; align-items:baseline; gap:12px;">
                 <span style="font-size:2.2rem; font-weight:700; color:{color};">{score}/100</span>
                 <span style="font-size:1rem; font-weight:600; color:{color};">{label}</span>
             </div>
-            <div style="background:#ffffff22; border-radius:6px; height:8px; margin-top:10px; overflow:hidden;">
+            <div style="background:#e5e3dd; border-radius:6px; height:8px; margin-top:10px; overflow:hidden;">
                 <div style="width:{score}%; background:{color}; height:100%;"></div>
             </div>
         </div>
@@ -136,7 +209,10 @@ def build_text_report(report: dict) -> str:
         lines.append("No risk-rule matches found.")
     for flag in sorted(report["flags"], key=lambda f: {"high": 0, "medium": 1, "low": 2}[f["level"]]):
         lines.append("")
-        lines.append(f"[{flag['level'].upper()}] {clause_label(flag)}")
+        review_tag = ""
+        if "human_approved" in flag:
+            review_tag = " [HUMAN APPROVED]" if flag["human_approved"] else " [NOT APPROVED — PENDING REVIEW]"
+        lines.append(f"[{flag['level'].upper()}] {clause_label(flag)}{review_tag}")
         lines.append(f"  Snippet: {flag['snippet']}")
         lines.append(f"  Reason: {flag['reason']}")
         if "explanation" in flag:
@@ -202,16 +278,160 @@ def build_highlighted_contract_html(contract_text: str, flags: list) -> str:
     body = "".join(pieces).replace("\n", "<br>")
     return (
         '<div style="max-height:500px; overflow-y:auto; padding:16px; '
-        'border:1px solid #ffffff22; border-radius:10px; line-height:1.6; '
-        'font-family:ui-monospace, monospace; font-size:0.85rem; white-space:pre-wrap;">'
+        'border:1px solid #ddd9d0; border-radius:10px; line-height:1.6; color:#161513; '
+        'font-family:ui-monospace, monospace; font-size:0.9rem; white-space:pre-wrap;">'
         f"{body}</div>"
     )
 
 
-st.title("📄 Contract Review & Risk Flagging Agent")
-st.caption("LangGraph pipeline over an MCP contract-analysis server. Not legal advice.")
+def render_final_report(report: dict, contract_text: str, page_starts: list, filename_stem: str):
+    """Renders the completed report (post human-review) — score, summary,
+    flagged clauses with approval status, missing clauses, highlighted
+    contract text, and downloads."""
+    report = dict(report)
+    report["flags"] = annotate_flags_with_pages(report["flags"], contract_text, page_starts)
+
+    render_risk_score(report["risk_score"])
+
+    st.subheader("Executive Summary")
+    st.info(report["negotiation_memo"])
+
+    summary = report["summary"]
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Word count", summary["word_count"])
+    col2.metric("Clauses found", f"{summary['clause_types_found']}/{summary['clause_types_total']}")
+    col3.metric("Flagged clauses", len(report["flags"]))
+
+    dl_col1, dl_col2 = st.columns(2)
+    dl_col1.download_button(
+        "⬇️ Download report (text)",
+        data=build_text_report(report),
+        file_name=f"{filename_stem}_review.txt",
+        mime="text/plain",
+        use_container_width=True,
+    )
+    dl_col2.download_button(
+        "⬇️ Download report (JSON)",
+        data=json.dumps(report, indent=2),
+        file_name=f"{filename_stem}_review.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+
+    st.subheader("Flagged Clauses")
+    if not report["flags"]:
+        st.write("No risk-rule matches found.")
+    for flag in sorted(report["flags"], key=lambda f: {"high": 0, "medium": 1, "low": 2}[f["level"]]):
+        approval_tag = ""
+        if "human_approved" in flag:
+            approval_tag = " ✅" if flag["human_approved"] else " ⚠️ not approved"
+        with st.expander(f"{LEVEL_BADGE[flag['level']]} — {clause_label(flag)}{approval_tag}"):
+            st.write(f"**Snippet:** {flag['snippet']}")
+            st.write(f"**Reason:** {flag['reason']}")
+            if "explanation" in flag:
+                st.write(f"**Explanation:** {flag['explanation']}")
+                st.write(f"**Suggested rewording (final, human-reviewed):** {flag['suggested_rewording']}")
+            if "human_approved" in flag:
+                st.caption("✅ Approved by human reviewer" if flag["human_approved"] else "⚠️ Not approved — flagged as pending during human review")
+
+    st.subheader("Missing Clauses")
+    missing_clauses = report["missing_clauses"]
+    if isinstance(missing_clauses, str):
+        missing_clauses = [missing_clauses]
+    if missing_clauses:
+        st.warning(", ".join(c.replace("_", " ").title() for c in missing_clauses))
+    else:
+        st.success("All standard clause types were found.")
+
+    st.subheader("Contract Text with Risk Highlights")
+    if not page_starts:
+        st.caption("Page citations aren't available for this file type (PDF only).")
+    if report["flags"]:
+        legend = "".join(
+            f'<span style="display:inline-flex;align-items:center;gap:6px;'
+            f'background:{LEVEL_COLOR[lvl]}22;color:{LEVEL_COLOR[lvl]};'
+            f'border:1px solid {LEVEL_COLOR[lvl]}55;border-radius:999px;'
+            f'padding:3px 12px;font-size:0.85rem;font-weight:600;margin-right:8px;">'
+            f'<span style="width:8px;height:8px;border-radius:50%;background:{LEVEL_COLOR[lvl]};"></span>'
+            f'{lvl.title()}</span>'
+            for lvl in ["high", "medium", "low"]
+        )
+        st.markdown(f'<div style="margin-bottom:10px;">{legend}</div>', unsafe_allow_html=True)
+        st.markdown(build_highlighted_contract_html(contract_text, report["flags"]), unsafe_allow_html=True)
+    else:
+        st.write("No flagged clauses to highlight.")
+
+    with st.expander("Full Report (JSON)"):
+        st.json(report)
+
+
+def render_human_review_form(flags_to_review: list, thread_id: str):
+    """
+    Renders the pause-point UI: one editable rewording + approve checkbox
+    per high/medium flag. On submit, calls resume_review_sync to actually
+    resume the paused LangGraph run (not a re-run) and stores the final
+    report in session state.
+    """
+    st.markdown(
+        f"""
+        <div style="background:#fbead2; border:1px solid #e2b365; border-radius:10px;
+                    padding:14px 18px; margin-bottom:16px; display:flex; align-items:center; gap:10px;">
+            <span style="font-size:1.1rem;">⏸️</span>
+            <span style="color:#6b4a12; font-weight:500;">
+                Review paused for human approval — {len(flags_to_review)} clause(s) need your sign-off
+                before the final report is generated.
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    for flag in sorted(flags_to_review, key=lambda f: {"high": 0, "medium": 1, "low": 2}[f["level"]]):
+        key_base = flag["clause_type"]
+        with st.container(border=True):
+            st.markdown(f"**{LEVEL_BADGE[flag['level']]} — {flag['clause_type'].replace('_', ' ').title()}**")
+            st.write(f"**Snippet:** {flag['snippet']}")
+            st.write(f"**Reason:** {flag['reason']}")
+            st.write(f"**Explanation:** {flag.get('explanation', '(none)')}")
+            st.text_area(
+                "Suggested rewording — edit as needed before approving",
+                value=flag.get("suggested_rewording", ""),
+                key=f"rewording__{key_base}",
+                height=100,
+            )
+            st.checkbox(
+                "✅ Approve this clause's rewording for the final report",
+                key=f"approved__{key_base}",
+            )
+
+    if st.button("Submit review & finalize report", type="primary"):
+        reviewed_flags = [
+            {
+                "clause_type": flag["clause_type"],
+                "suggested_rewording": st.session_state.get(f"rewording__{flag['clause_type']}", flag.get("suggested_rewording", "")),
+                "approved": st.session_state.get(f"approved__{flag['clause_type']}", False),
+            }
+            for flag in flags_to_review
+        ]
+        with st.spinner("Finalizing report..."):
+            result = resume_review_sync(reviewed_flags, thread_id)
+        st.session_state.review_result = result
+        st.session_state.pending_review = None
+        st.rerun()
+
+
+st.title("📄 Clausegraph")
+st.caption("Contract review and risk flagging, powered by a LangGraph pipeline with a human-in-the-loop review gate. Not legal advice.")
 
 ensure_mcp_server_running()
+
+# Session state for the two-step start/resume flow.
+if "pending_review" not in st.session_state:
+    st.session_state.pending_review = None  # {"thread_id", "flags", "contract_text", "page_starts", "filename_stem"}
+if "review_result" not in st.session_state:
+    st.session_state.review_result = None  # {"status": "done", "report": {...}}
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = str(uuid.uuid4())
 
 uploaded = st.file_uploader("Upload a contract", type=["pdf", "docx", "txt"])
 
@@ -231,85 +451,50 @@ if uploaded:
     with st.spinner("Extracting text..."):
         contract_text, page_starts = extract_text_with_pages(str(tmp_path))
 
-    if st.button("Run review", type="primary"):
-        with st.spinner("Identifying clauses, flagging risks, generating explanations..."):
-            report = run_review_sync(contract_text, jurisdiction_value)
-        report["flags"] = annotate_flags_with_pages(report["flags"], contract_text, page_starts)
+    # Case 1: a review is currently paused, waiting for human input.
+    if st.session_state.pending_review:
+        pending = st.session_state.pending_review
+        render_human_review_form(pending["flags"], pending["thread_id"])
 
-        render_risk_score(report["risk_score"])
-
-        st.subheader("Executive Summary")
-        st.info(report["negotiation_memo"])
-
-        summary = report["summary"]
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Word count", summary["word_count"])
-        col2.metric("Clauses found", f"{summary['clause_types_found']}/{summary['clause_types_total']}")
-        col3.metric("Flagged clauses", len(report["flags"]))
-
-        dl_col1, dl_col2 = st.columns(2)
-        dl_col1.download_button(
-            "⬇️ Download report (text)",
-            data=build_text_report(report),
-            file_name=f"{Path(uploaded.name).stem}_review.txt",
-            mime="text/plain",
-            use_container_width=True,
+    # Case 2: a review just completed — show the final report.
+    elif st.session_state.review_result:
+        render_final_report(
+            st.session_state.review_result["report"],
+            contract_text,
+            page_starts,
+            Path(uploaded.name).stem,
         )
-        dl_col2.download_button(
-            "⬇️ Download report (JSON)",
-            data=json.dumps(report, indent=2),
-            file_name=f"{Path(uploaded.name).stem}_review.json",
-            mime="application/json",
-            use_container_width=True,
-        )
+        if st.button("Start a new review"):
+            st.session_state.review_result = None
+            st.session_state.thread_id = str(uuid.uuid4())
+            st.rerun()
 
-        st.subheader("Flagged Clauses")
-        if not report["flags"]:
-            st.write("No risk-rule matches found.")
-        for flag in sorted(report["flags"], key=lambda f: {"high": 0, "medium": 1, "low": 2}[f["level"]]):
-            with st.expander(f"{LEVEL_BADGE[flag['level']]} — {clause_label(flag)}"):
-                st.write(f"**Snippet:** {flag['snippet']}")
-                st.write(f"**Reason:** {flag['reason']}")
-                if "explanation" in flag:
-                    st.write(f"**Explanation:** {flag['explanation']}")
-                    st.write(f"**Suggested rewording:** {flag['suggested_rewording']}")
+    # Case 3: nothing started yet — show the "Run review" button.
+    else:
+        if st.button("Run review", type="primary"):
+            with st.spinner("Identifying clauses, flagging risks, generating explanations..."):
+                result = start_review_sync(contract_text, jurisdiction_value, st.session_state.thread_id)
 
-        st.subheader("Missing Clauses")
-        missing_clauses = report["missing_clauses"]
-        if isinstance(missing_clauses, str):
-            # The backend returns a bare string instead of a list when
-            # exactly one clause is missing — normalize here so it isn't
-            # iterated character-by-character (e.g. "renewal" -> "r","e",...).
-            missing_clauses = [missing_clauses]
-        if missing_clauses:
-            st.warning(", ".join(c.replace("_", " ").title() for c in missing_clauses))
-        else:
-            st.success("All standard clause types were found.")
-
-        st.subheader("Contract Text with Risk Highlights")
-        if not page_starts:
-            st.caption("Page citations aren't available for this file type (PDF only).")
-        if report["flags"]:
-            legend = "  ".join(
-                f'<span style="color:{LEVEL_COLOR[lvl]};">●</span> {lvl.title()}'
-                for lvl in ["high", "medium", "low"]
-            )
-            st.markdown(legend, unsafe_allow_html=True)
-            st.markdown(build_highlighted_contract_html(contract_text, report["flags"]), unsafe_allow_html=True)
-        else:
-            st.write("No flagged clauses to highlight.")
-
-        with st.expander("Full Report (JSON)"):
-            st.json(report)
+            if result["status"] == "needs_review":
+                st.session_state.pending_review = {
+                    "thread_id": st.session_state.thread_id,
+                    "flags": result["review_payload"]["flags"],
+                }
+                st.rerun()
+            else:
+                st.session_state.review_result = result
+                st.rerun()
 
     tmp_path.unlink(missing_ok=True)
 else:
     st.info("Upload a .pdf, .docx, or .txt contract to begin.")
+    st.session_state.pending_review = None
+    st.session_state.review_result = None
 
 
 st.divider()
 st.subheader("🔁 Compare Two Contract Versions")
-st.caption("See what changed between an older and newer version — added, removed, or reworded clauses, and new or resolved risks.")
+st.caption("See what changed between an older and newer version — added, removed, or reworded clauses, and new or resolved risks. (No human review gate in this flow.)")
 
 comp_col1, comp_col2 = st.columns(2)
 uploaded_a = comp_col1.file_uploader("Older / baseline version", type=["pdf", "docx", "txt"], key="compare_a")

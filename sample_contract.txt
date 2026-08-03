@@ -1,60 +1,9 @@
-﻿SERVICE AGREEMENT
+﻿This Agreement is entered into as of January 1, 2027 between ABC Ltd and XYZ Inc.
 
-This Service Agreement ("Agreement") is entered into by and between
-Acme Consulting LLC ("Provider") and Northwind Retail Inc. ("Client").
+Payment Terms: Customer shall pay all invoiced amounts Net 60 from the invoice date.
 
-1. SCOPE OF SERVICES
-Provider shall deliver software consulting and development services as
-described in Exhibit A, which may be modified by Provider at any time
-without prior notice to Client.
+Termination: Customer may terminate this agreement at any time upon written notice to Vendor.
 
-2. PAYMENT TERMS
-Client shall pay Provider within 90 days of invoice receipt. Late
-payments shall not accrue interest or penalties under any circumstances.
+Liability: The Vendor shall be liable for all damages without limitation arising from this agreement.
 
-3. TERMINATION
-This Agreement may be terminated by Provider at any time, for any
-reason, with immediate effect and without notice. Client may not
-terminate this Agreement prior to the end of the initial 24-month term
-under any circumstances.
-
-4. LIABILITY
-Provider's total liability under this Agreement, whether in contract,
-tort, or otherwise, shall be unlimited and shall include indirect,
-incidental, special, and consequential damages of any kind.
-
-5. INTELLECTUAL PROPERTY
-All work product, inventions, and materials created by Provider under
-this Agreement shall remain the sole and exclusive property of Provider,
-including any materials developed using Client's proprietary data.
-
-6. CONFIDENTIALITY
-Each party agrees to keep confidential information disclosed by the
-other party confidential for a period of 12 months following disclosure.
-
-7. NON-COMPETE
-Client agrees not to engage any competing consulting firm for a period
-of 5 years following termination of this Agreement, worldwide, in any
-industry Provider currently or may in the future operate in.
-
-8. GOVERNING LAW
-This Agreement shall be governed by the laws of the state in which
-Provider's principal office is located, without regard to conflict of
-law principles.
-
-9. AUTOMATIC RENEWAL
-This Agreement shall automatically renew for successive 24-month terms
-unless either party provides written notice of non-renewal at least
-180 days prior to the end of the then-current term.
-
-10. INDEMNIFICATION
-Client shall indemnify, defend, and hold harmless Provider from any and
-all claims, damages, losses, and expenses, including attorneys' fees,
-arising out of or related to this Agreement, regardless of fault.
-
-IN WITNESS WHEREOF, the parties have executed this Agreement as of the
-date first written above.
-
-Acme Consulting LLC                    Northwind Retail Inc.
-_______________________                _______________________
-Authorized Signature                   Authorized Signature
+Renewal: This agreement shall automatically renew for successive one-year terms unless either party provides 30 days written notice of non-renewal.
