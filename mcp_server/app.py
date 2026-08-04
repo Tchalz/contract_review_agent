@@ -38,6 +38,7 @@ MCP_HOST = os.environ.get("HOST", "0.0.0.0")
 MCP_PORT = int(os.environ.get("PORT", 8002))
 load_dotenv()
 
+
 from mcp.server.fastmcp import FastMCP
 
 from risk_rules import CLAUSE_SIGNALS, STANDARD_CHECKLIST, RISK_RULES, DEFAULT_RISK_LEVEL
@@ -51,7 +52,7 @@ mcp = FastMCP("Contract Review Server", host=MCP_HOST, port=MCP_PORT)
 # ---------------------------------------------------------------------------
 
 _client = None
-_MODEL = os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+_MODEL = os.environ.get("OPENROUTER_MODEL", "openai/gpt-oss-20b:free")
 
 
 def _get_client():
