@@ -41,6 +41,11 @@ sys.path.insert(0, str(ROOT / "mcp_server"))
 
 from parsing import extract_text_with_pages, page_number_at  # noqa: E402
 from graph import start_review_sync, resume_review_sync, run_comparison_sync  # noqa: E402
+from document_builder import (  # noqa: E402
+    build_updated_contract_docx, build_updated_contract_pdf,
+    build_change_summary_docx, build_change_summary_pdf,
+    get_approved_changes,
+)
 
 MCP_SERVER_SCRIPT = ROOT / "mcp_server" / "app.py"
 
@@ -315,6 +320,48 @@ def render_final_report(report: dict, contract_text: str, page_starts: list, fil
         data=json.dumps(report, indent=2),
         file_name=f"{filename_stem}_review.json",
         mime="application/json",
+        use_container_width=True,
+    )
+
+    st.subheader("Updated Contract & Change Summary")
+    approved_changes = get_approved_changes(report["flags"])
+    doc_title = filename_stem.replace("_", " ").replace("-", " ").title()
+    if not approved_changes:
+        st.caption(
+            "No clauses were approved for rewording during human review, so the updated "
+            "contract below is identical to the original — download it anyway if you'd "
+            "like a Clausegraph-stamped copy, or check the change summary for details."
+        )
+    else:
+        st.caption(f"{len(approved_changes)} approved clause edit(s) applied below.")
+
+    uc_col1, uc_col2, cs_col1, cs_col2 = st.columns(4)
+    uc_col1.download_button(
+        "⬇️ Updated contract (.docx)",
+        data=build_updated_contract_docx(contract_text, report["flags"], doc_title),
+        file_name=f"{filename_stem}_updated.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True,
+    )
+    uc_col2.download_button(
+        "⬇️ Updated contract (.pdf)",
+        data=build_updated_contract_pdf(contract_text, report["flags"], doc_title),
+        file_name=f"{filename_stem}_updated.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+    )
+    cs_col1.download_button(
+        "⬇️ Change summary (.docx)",
+        data=build_change_summary_docx(report["flags"], doc_title),
+        file_name=f"{filename_stem}_changes.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True,
+    )
+    cs_col2.download_button(
+        "⬇️ Change summary (.pdf)",
+        data=build_change_summary_pdf(report["flags"], doc_title),
+        file_name=f"{filename_stem}_changes.pdf",
+        mime="application/pdf",
         use_container_width=True,
     )
 

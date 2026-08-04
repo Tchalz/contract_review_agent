@@ -6,3 +6,5 @@ pdfplumber
 python-docx
 
 python-dotenv
+
+reportlab

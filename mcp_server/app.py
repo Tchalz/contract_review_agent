@@ -75,9 +75,17 @@ def _llm(prompt: str, fallback: str) -> str:
         resp = client.chat.completions.create(
             model=_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=250,
+            max_tokens=600,
+            extra_body={"reasoning": {"effort": "low"}},
         )
-        return resp.choices[0].message.content.strip()
+        content = resp.choices[0].message.content
+        if not content or not content.strip():
+            # Some free models occasionally return an empty/None body
+            # (a refusal, a reasoning-only response, a truncated
+            # completion) instead of raising — treat that as a failure
+            # too, rather than crashing on .strip().
+            return f"{fallback} (LLM returned an empty response — showing the rule-based assessment instead.)"
+        return content.strip()
     except Exception as e:  # network/auth errors shouldn't break the tool
         return f"{fallback} (LLM explanation unavailable: {e})"
 
